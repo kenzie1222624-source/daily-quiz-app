@@ -49,11 +49,11 @@
         </div>
         <div>
           <label>模型名稱</label>
-          <input id="model" placeholder="google/gemma-4-26b-a4b-it:free">
+          <input id="model" placeholder="gemini-2.0-flash">
         </div>
         <div>
           <label>API 網址（OpenAI 相容）</label>
-          <input id="baseUrl" placeholder="https://openrouter.ai/api/v1">
+          <input id="baseUrl" placeholder="https://generativelanguage.googleapis.com/v1beta/openai">
         </div>
       </div>
     </div>
@@ -118,8 +118,8 @@ const LS = { key:"dq_key", model:"dq_model", base:"dq_base", hist:"dq_history" }
 
 function loadSettings() {
   $("apiKey").value = localStorage.getItem(LS.key) || "";
-  $("model").value = localStorage.getItem(LS.model) || "google/gemma-4-26b-a4b-it:free";
-  $("baseUrl").value = localStorage.getItem(LS.base) || "https://openrouter.ai/api/v1";
+  $("model").value = localStorage.getItem(LS.model) || "gemini-2.0-flash";
+  $("baseUrl").value = localStorage.getItem(LS.base) || "https://generativelanguage.googleapis.com/v1beta/openai";
 }
 function saveSettings() {
   localStorage.setItem(LS.key, $("apiKey").value.trim());
@@ -230,8 +230,9 @@ async function generateWithRetry(msgs) {
   const primary = $("model").value.trim();
   const VISION_KNOWN = ["google/gemma-4-26b-a4b-it:free", "google/gemma-4-31b-it:free", "openai/gpt-4o-mini", "openai/gpt-4o", "anthropic/claude-3-haiku", "anthropic/claude-3.5-haiku"];
   let order;
+  let order;
   if (currentImages.length > 0) {
-    order = VISION_KNOWN.includes(primary) ? [primary, ...VISION_FREE.filter(m => m !== primary)] : VISION_FREE.slice();
+    order = [primary, ...VISION_FREE.filter(m => m !== primary)];
   } else {
     order = [primary, ...FREE_MODELS.filter(m => m !== primary)];
   }
