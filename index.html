@@ -228,11 +228,14 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function generateWithRetry(msgs) {
   const primary = $("model").value.trim();
-  const VISION_KNOWN = ["google/gemma-4-26b-a4b-it:free", "google/gemma-4-31b-it:free", "openai/gpt-4o-mini", "openai/gpt-4o", "anthropic/claude-3-haiku", "anthropic/claude-3.5-haiku"];
-  let order;
+  const baseVal = $("baseUrl").value.trim();
+  let effectivePrimary = primary;
+  if (currentImages.length > 0 && /googleapis\.com/i.test(baseVal)) {
+    effectivePrimary = "gemini-2.0-flash";
+  }
   let order;
   if (currentImages.length > 0) {
-    order = [primary, ...VISION_FREE.filter(m => m !== primary)];
+    order = [effectivePrimary, ...VISION_FREE.filter(m => m !== effectivePrimary)];
   } else {
     order = [primary, ...FREE_MODELS.filter(m => m !== primary)];
   }
