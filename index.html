@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日出題小老師（國中會考版）</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --ok:#4ade80; --bad:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Noto Sans TC", system-ui, sans-serif; background:var(--bg); color:var(--txt); line-height:1.6; }
+  .wrap { max-width:880px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:14px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:18px; }
+  .card h2 { font-size:17px; margin:0 0 12px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  input, textarea, select { width:100%; background:#0b1220; border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:9px 11px; font-size:14px; }
+  textarea { min-height:120px; resize:vertical; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:160px; }
+  button { background:var(--accent); color:#06283d; border:none; border-radius:8px; padding:10px 18px; font-size:14px; font-weight:700; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .q { border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .q .num { color:var(--accent); font-weight:700; }
+  .meta { color:var(--muted); font-size:12px; }
+  .score-big { font-size:40px; font-weight:800; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .fb { font-size:13px; color:var(--muted); margin-top:6px; white-space:pre-wrap; }
+  .hist { font-size:13px; border-bottom:1px solid var(--line); padding:8px 0; display:flex; justify-content:space-between; gap:10px; }
+  .toggle { color:var(--muted); font-size:13px; cursor:pointer; user-select:none; }
+  .hidden { display:none; }
+  .err { color:var(--bad); font-size:13px; margin-top:8px; white-space:pre-wrap; }
+  label.opt { display:block; margin:4px 0; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>每日出題小老師（國中會考版）</h1>
+  <div class="sub">貼上範例題目（如 1+1）→ 自動出 5 題同類型類似題（國中會考程度）→ 作答後自動評分並紀錄</div>
+
+  <div class="card">
+    <h2>⚙️ 設定（API，僅存在本機） <span class="toggle" onclick="document.getElementById('settings').classList.toggle('hidden')">[收合/展開]</span></h2>
+    <div id="settings">
+      <div class="row">
+        <div>
+          <label>API Key</label>
+          <input id="apiKey" type="password" placeholder="sk-or-v1-...">
+        </div>
+        <div>
+          <label>模型名稱</label>
+          <input id="model" placeholder="google/gemma-4-26b-a4b-it:free">
+        </div>
+        <div>
+          <label>API 網址（OpenAI 相容）</label>
+          <input id="baseUrl" placeholder="https://openrouter.ai/api/v1">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="inputCard">
+    <h2>📥 範例題目</h2>
+    <label>科目</label>
+    <select id="subject">
+      <option value="數學">數學</option>
+      <option value="理化">理化</option>
+      <option value="生物">生物</option>
+      <option value="地球科學">地球科學</option>
+      <option value="國文">國文</option>
+      <option value="英語">英語</option>
+      <option value="社會">社會</option>
+      <option value="其他">其他</option>
+    </select>
+    <label>貼上你的範例題目（例如：1+1、或課本某一題）</label>
+    <textarea id="content" placeholder="貼上範例題目，例如：1+1 ..."></textarea>
+    <label>或上傳檔案（.txt / .md）</label>
+    <input id="file" type="file" accept=".txt,.md,text/plain">
+    <label>或上傳題目照片（可多選，手寫/試卷照片會自動辨識）</label>
+    <input id="imgFile" type="file" accept="image/*" multiple>
+    <div style="margin-top:14px; display:flex; gap:10px;">
+      <button id="genBtn" onclick="generate()">產生 5 題</button>
+      <button class="ghost" onclick="clearContent()">清空</button>
+    </div>
+    <div id="genErr" class="err"></div>
+  </div>
+
+  <div class="card hidden" id="quizCard">
+    <h2>📝 測驗</h2>
+    <div id="questions"></div>
+    <button id="submitBtn" onclick="grade()">交卷評分</button>
+    <div id="gradeErr" class="err"></div>
+  </div>
+
+  <div class="card hidden" id="resultCard">
+    <h2>📊 成績</h2>
+    <div id="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>📚 歷史紀錄</h2>
+    <div id="history"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const LS = { key:"dq_key", model:"dq_model", base:"dq_base", hist:"dq_history" };
+
+function loadSettings() {
+  $("apiKey").value = localStorage.getItem(LS.key) || "";
+  $("model").value = localStorage.getItem(LS.model) || "google/gemma-4-26b-a4b-it:free";
+  $("baseUrl").value = localStorage.getItem(LS.base) || "https://openrouter.ai/api/v1";
+}
+function saveSettings() {
+  localStorage.setItem(LS.key, $("apiKey").value.trim());
+  localStorage.setItem(LS.model, $("model").value.trim());
+  localStorage.setItem(LS.base, $("baseUrl").value.trim());
+}
+["apiKey","model","baseUrl"].forEach(id => $(id).addEventListener("change", saveSettings));
+
+function clearContent() { $("content").value = ""; $("file").value = ""; $("imgFile").value = ""; currentImages = []; }
+
+$("file").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { $("content").value = r.result; };
+  r.readAsText(f);
+});
+
+let currentImages = [];
+function compressImage(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const max = 1024;
+      let w = img.width, h = img.height;
+      if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
+      else if (h > max) { w = Math.round(w * max / h); h = max; }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      try { resolve(canvas.toDataURL("image/jpeg", 0.8)); }
+      catch (_) { resolve(dataUrl); }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+$("imgFile").addEventListener("change", e => {
+  const files = Array.from(e.target.files || []);
+  currentImages = [];
+  if (!files.length) return;
+  let pending = files.length;
+  files.forEach(f => {
+    const r = new FileReader();
+    r.onload = () => {
+      compressImage(r.result).then(comp => { currentImages.push(comp); pending--; });
+    };
+    r.readAsDataURL(f);
+  });
+});
+
+function getContent() { return $("content").value.trim(); }
+
+function extractJSON(t) {
+  t = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  t = t.replace(/,(\s*[}\]])/g, "$1");
+  try { return JSON.parse(t); } catch (_) {}
+  const open = t.search(/[[{]/);
+  if (open === -1) throw new Error("無法解析 AI 回傳的 JSON");
+  const closeCh = t[open] === "[" ? "]" : "}";
+  let depth = 0, inStr = false, esc = false;
+  for (let i = open; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else {
+      if (c === '"') inStr = true;
+      else if (c === t[open]) depth++;
+      else if (c === closeCh) {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(t.slice(open, i + 1)); }
+          catch (e) { throw new Error("無法解析 AI 回傳的 JSON"); }
+        }
+      }
+    }
+  }
+  throw new Error("無法解析 AI 回傳的 JSON（回傳可能被截斷，請重試）");
+}
+
+async function callAI(messages, temperature = 0.7, modelOverride = null) {
+  const key = $("apiKey").value.trim();
+  const model = (modelOverride || $("model").value.trim());
+  const base = $("baseUrl").value.trim().replace(/\/$/, "");
+  if (!key) throw new Error("請先填寫 API Key");
+  const res = await fetch(base + "/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+    body: JSON.stringify({ model, messages, temperature, max_tokens: 6000 })
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error("API 錯誤 " + res.status + "：" + txt.slice(0, 300));
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+let currentQuiz = [];
+
+const FREE_MODELS = ["google/gemma-4-26b-a4b-it:free", "google/gemma-4-31b-it:free", "openrouter/free"];
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function generateWithRetry(msgs) {
+  const primary = $("model").value.trim();
+  const order = [primary, ...FREE_MODELS.filter(m => m !== primary)];
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const model = order[attempt % order.length];
+    try {
+      return await callAI(msgs, 0.8, model);
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e.message);
+      if (msg.includes("429")) { await sleep(5000 + attempt * 2000); continue; }
+      if (msg.includes("402")) { continue; }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+async function generate() {
+  const content = getContent();
+  if (!content && currentImages.length === 0) { $("genErr").textContent = "請貼上範例題目，或上傳題目照片"; return; }
+  $("genErr").textContent = "";
+  const btn = $("genBtn"); btn.disabled = true; btn.textContent = "產生中...";
+  try {
+    const subject = $("subject").value;
+    const sys = "你是台灣國中教育會考（國中會考）的出題老師，依據學習內容或圖片設計符合會考程度、中高難度的單選選擇題。";
+    let user = `使用者會提供「範例題目」（可能一道或多道，可能在文字或圖片中）。
+請根據這些範例，產生 5 題「同類型、同難度」的練習題（類似題）：題目形式/考點要與範例一致，但更換數字、條件或內容，不要直接重複範例。
+例如輸入「1+1」，就出「其他數字+其他數字」或「其他數字-其他數字」這類算術題。
+【重要】本卷科目限定為「${subject}」，所有題目都必須是 ${subject} 的範圍，絕對不能出其他科目的題目。
+難度需符合台灣國中教育會考程度、中高難度。請出成「單選選擇題」，每題 4 個選項，只有一個正確。
+題型請模仿國中會考風格：單選四選一、題幹可為情境式或素養導向敘述，選項為完整可讀的內容（勿用過短代號），必要時可加入圖表/數據的文字描述。題幹請寫得詳細完整，包含充足的情境背景與條件描述，不要過於簡短（目標 3–6 句情境 + 提問）。
+只回傳 JSON 陣列，格式如下，不要有任何額外文字：
+[{"q":"題幹","options":["選項A","選項B","選項C","選項D"],"answer":0,"explain":"正確答案的簡短解析"}, ...]
+（answer 為正確選項在 options 中的索引，從 0 開始；選項順序要隨機打散，不要把正解都放同一位置）
+
+範例題目（文字）：
+${content || "（請參考附圖中的題目）"}`;
+    if (subject === "英語") {
+      user += "\n\n【英文科特別要求】請出「選擇填空題（cloze）」：給一段英文句子或短文（題幹只需 2–3 句情境即可，不必過長），挖一個空格（用 _____ 表示），四個選項為可填入的單字或片語（皆為英文）。程度為國中會考。explain 欄位請用繁體中文、簡短撰寫，並壓成兩行：第一行「翻譯：」該句中文翻譯；第二行「句意：」一句話說明為何正解正確。不要冗長。";
+    }
+    let userContent;
+    if (currentImages.length) {
+      userContent = [
+        { type: "text", text: user + "\n\n【注意】本訊息附有" + currentImages.length + "張圖片（可能是手寫筆記或題目照片），請綜合圖片中的範例題目來出類似題；若同時有文字範例也一併參考。" }
+      ];
+      currentImages.forEach(u => userContent.push({ type: "image_url", image_url: { url: u } }));
+    } else {
+      userContent = user;
+    }
+    const msgs = [{ role: "system", content: sys }, { role: "user", content: userContent }];
+    let arr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const text = await generateWithRetry(msgs);
+      try { arr = extractJSON(text); break; }
+      catch (e) {
+        if (attempt === 2) throw e;
+      }
+    }
+    if (!Array.isArray(arr) || arr.length === 0) throw new Error("題目格式異常");
+    const letters = ["A", "B", "C", "D"];
+    currentQuiz = arr.map(x => {
+      let ans = x.answer;
+      if (typeof ans === "string") {
+        const li = letters.indexOf(ans.trim().toUpperCase());
+        ans = li >= 0 ? li : Number(ans);
+      }
+      let opts = x.options;
+      if (typeof opts === "string") opts = opts.split(/[,\n、]/).map(s => s.trim()).filter(Boolean);
+      return { q: x.q, options: opts, answer: Number(ans), explain: x.explain || "" };
+    });
+    renderQuiz();
+    $("quizCard").classList.remove("hidden");
+    $("resultCard").classList.add("hidden");
+    $("quizCard").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    $("genErr").textContent = "出題失敗：" + e.message;
+    logErr("generate", e);
+  } finally {
+    btn.disabled = false; btn.textContent = "產生 5 題";
+  }
+}
+
+function renderQuiz() {
+  const box = $("questions");
+  box.innerHTML = "";
+  currentQuiz.forEach((item, i) => {
+    const d = document.createElement("div");
+    d.className = "q";
+    let opts = "";
+    item.options.forEach((o, oi) => {
+      opts += `<label class="opt"><input type="radio" name="q${i}" value="${oi}"> ${escapeHtml(o)}</label>`;
+    });
+    d.innerHTML = `<div class="num">第 ${i + 1} 題</div><div>${escapeHtml(item.q)}</div>${opts}`;
+    box.appendChild(d);
+  });
+}
+
+function grade() {
+  if (!currentQuiz.length) return;
+  const answers = currentQuiz.map((_, i) => {
+    const el = document.querySelector(`input[name="q${i}"]:checked`);
+    return el ? Number(el.value) : null;
+  });
+  if (answers.some(a => a === null)) { $("gradeErr").textContent = "請作答所有題目再交卷"; return; }
+  $("gradeErr").textContent = "";
+  let correct = 0;
+  const detail = answers.map((a, i) => {
+    const ok = a === currentQuiz[i].answer;
+    if (ok) correct++;
+    return { picked: a, ok };
+  });
+  const score = Math.round(correct / currentQuiz.length * 100);
+  showResult(detail, score, correct);
+  saveHistoryScore(score, detail);
+}
+
+function showResult(detail, score, correct) {
+  const subj = $("subject").value;
+  const label = explainLabel(subj);
+  let html = `<div class="score-big ${score >= 70 ? "ok" : "bad"}">${score} 分</div>
+    <div class="meta">答對 ${correct} / ${currentQuiz.length} 題</div><hr style="border-color:var(--line)">`;
+  detail.forEach((d, i) => {
+    const it = currentQuiz[i];
+    const letters = ["A", "B", "C", "D"];
+    html += `<div class="q">
+      <div class="num">第 ${i + 1} 題 — <span class="${d.ok ? "ok" : "bad"}">${d.ok ? "答對" : "答錯"}</span></div>
+      <div>${escapeHtml(it.q)}</div>
+      <div class="meta">你的選擇：${letters[d.picked]}　正確答案：${letters[it.answer]}</div>
+      <div class="fb">${label}${escapeHtml(it.explain)}</div>
+    </div>`;
+  });
+  $("result").innerHTML = html;
+  $("resultCard").classList.remove("hidden");
+  $("resultCard").scrollIntoView({ behavior: "smooth" });
+}
+
+function saveHistoryScore(score, detail) {
+  const content = getContent();
+  const subject = $("subject").value;
+  const topic = subject + "｜" + ((content.split("\n")[0] || (currentImages.length ? "照片x" + currentImages.length : "未命名")).slice(0, 30));
+  const rec = {
+    date: new Date().toLocaleString("zh-TW"),
+    topic, score, subject,
+    quiz: currentQuiz.map((q, i) => ({
+      q: q.q, options: q.options, answer: q.answer, explain: q.explain,
+      picked: detail ? detail[i].picked : null,
+      ok: detail ? detail[i].ok : false
+    }))
+  };
+  const hist = JSON.parse(localStorage.getItem(LS.hist) || "[]");
+  hist.unshift(rec);
+  localStorage.setItem(LS.hist, JSON.stringify(hist));
+  renderHistory();
+}
+
+function renderHistory() {
+  const hist = JSON.parse(localStorage.getItem(LS.hist) || "[]");
+  if (!hist.length) { $("history").innerHTML = '<div class="meta">尚無紀錄</div>'; return; }
+  const letters = ["A", "B", "C", "D"];
+  $("history").innerHTML = hist.map((h, idx) => {
+    let detail = h.quiz ? "" : '<div class="meta" style="padding:10px">此紀錄建立於更新前，無題目詳細資料。重新產題即可儲存。</div>';
+    if (h.quiz) {
+      detail = h.quiz.map((q, i) => {
+        const opts = q.options.map((o, oi) => {
+          let style = "";
+          if (oi === q.answer) style = "color:var(--ok)";
+          else if (oi === q.picked && !q.ok) style = "color:var(--bad)";
+          const tag = (oi === q.answer ? " （正解）" : "") + (oi === q.picked ? " （你的選擇）" : "");
+          return `<div class="meta" style="${style}">${letters[oi]}. ${escapeHtml(o)}${tag}</div>`;
+        }).join("");
+        return `<div class="q" style="${q.ok ? "" : "border-color:var(--bad)"}">
+          <div class="num">第 ${i + 1} 題 — <span class="${q.ok ? "ok" : "bad"}">${q.ok ? "答對" : "答錯"}</span></div>
+          <div>${escapeHtml(q.q)}</div>
+          ${opts}
+          <div class="fb">${explainLabel(h.subject)} ${escapeHtml(q.explain)}</div>
+        </div>`;
+      }).join("");
+    }
+    return `<div class="hist" style="cursor:pointer" onclick="toggleHist(${idx})">
+        <span>${h.date}<br><span class="meta">${escapeHtml(h.topic)} ｜ 點開看題目</span></span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <span class="${h.score >= 70 ? "ok" : "bad"}" style="font-weight:700">${h.score} 分</span>
+          <button class="ghost" style="padding:2px 8px;font-size:12px" onclick="event.stopPropagation();deleteHistory(${idx})">刪除</button>
+        </span>
+      </div>
+      <div id="hist${idx}" class="hidden">${detail}</div>`;
+  }).join("") + `<div style="margin-top:10px"><button class="ghost" onclick="clearHistory()">清除全部紀錄</button></div>`;
+}
+
+function toggleHist(idx) {
+  const el = $("hist" + idx);
+  if (el) el.classList.toggle("hidden");
+}
+
+function clearHistory() {
+  if (confirm("確定清除所有歷史紀錄？")) { localStorage.removeItem(LS.hist); renderHistory(); }
+}
+
+function deleteHistory(idx) {
+  const hist = JSON.parse(localStorage.getItem(LS.hist) || "[]");
+  hist.splice(idx, 1);
+  localStorage.setItem(LS.hist, JSON.stringify(hist));
+  renderHistory();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function explainLabel(subj) { return subj === "英語" ? "翻譯與解析：" : "解析："; }
+
+function logErr(stage, e) {
+  try { console.error(`[${new Date().toISOString()}] ${stage}: ${e.message}`); } catch (_) {}
+}
+
+loadSettings();
+renderHistory();
+</script>
+</body>
+</html>
