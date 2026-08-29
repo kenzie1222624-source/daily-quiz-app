@@ -325,14 +325,14 @@ async function generate() {
   const btn = $("genBtn"); btn.disabled = true; btn.textContent = "產生中...";
   try {
     const subject = $("subject").value;
-    const sys = "你是台灣國中教育會考（國中會考）的出題老師，依據學習內容或圖片設計符合會考程度、中高難度的單選選擇題。你必須全程使用繁體中文出題與撰寫解析，絕對不可使用英文（若需保留原文專有名詞，請以括號附註中文，例如「牛頓（Newton）」）。";
+    const sys = "你是台灣國中教育會考（國中會考）的出題老師，依據學習內容或圖片設計符合會考程度、中高難度的單選選擇題。你必須全程使用繁體中文出題與撰寫解析，絕對不可使用英文（若需保留原文專有名詞，請以括號附註中文，例如「牛頓（Newton）」）。你必須嚴格根據使用者提供的範例（文字或圖片）『實際出現』的內容來出題，不可自創與範例無關的主題、考點或題型；若來源是圖片，請先確實辨識圖中的題目再據此出題。";
     let user = `使用者會提供「範例題目」（可能一道或多道，可能在文字或圖片中）。
 請根據這些範例，產生 5 題「同類型、同難度」的練習題（類似題）：題目形式/考點要與範例一致，但更換數字、條件或內容，不要直接重複範例。
 例如輸入「1+1」，就出「其他數字+其他數字」或「其他數字-其他數字」這類算術題。
 【重要】本卷科目限定為「${subject}」，所有題目都必須是 ${subject} 的範圍，絕對不能出其他科目的題目。
 【語言】題幹、四個選項、解析都必須全程使用繁體中文，不可使用英文（必要的原文專有名詞請括號附註中文）。
 難度需符合台灣國中教育會考程度、中高難度。請出成「單選選擇題」，每題 4 個選項，只有一個正確。
-題型請模仿國中會考風格：單選四選一、題幹可為情境式或素養導向敘述，選項為完整可讀的內容（勿用過短代號），必要時可加入圖表/數據的文字描述。題幹請寫得詳細完整，包含充足的情境背景與條件描述，不要過於簡短（目標 3–6 句情境 + 提問）。若為理科（理化/生物/地球科學），請清楚列出已知條件、所用公式與計算步驟，題目數據要合理且單位正確。
+題型請模仿國中會考風格：單選四選一、題幹可為情境式或素養導向敘述，選項為完整可讀的內容（勿用過短代號），必要時可加入圖表/數據的文字描述。題幹請寫得詳細完整，包含充足的情境背景與條件描述，不要過於簡短（目標 3–6 句情境 + 提問）。若來源含圖表或圖形（如幾何圖、函數圖、實驗裝置圖），請把作答所需的圖形與數據用文字完整描述在題幹中，不可只寫「如圖所示」而沒有圖。若為理科（理化/生物/地球科學），請清楚列出已知條件、所用公式與計算步驟，題目數據要合理且單位正確。
 只回傳 JSON 陣列，格式如下，不要有任何額外文字：
 [{"q":"題幹","options":["選項A","選項B","選項C","選項D"],"answer":0,"explain":"正確答案的簡短解析"}, ...]
 （answer 為正確選項在 options 中的索引，從 0 開始；選項順序要隨機打散，不要把正解都放同一位置）
@@ -345,7 +345,7 @@ ${content || "（請參考附圖中的題目）"}`;
     let userContent;
     if (currentImages.length) {
       userContent = [
-        { type: "text", text: user + "\n\n【注意】本訊息附有" + currentImages.length + "張圖片（可能是手寫筆記或題目照片），請綜合圖片中的範例題目來出類似題；若同時有文字範例也一併參考。" }
+        { type: "text", text: user + "\n\n【注意】本訊息附有" + currentImages.length + "張圖片（可能是手寫筆記或題目照片）。你【必須】根據圖片中『實際出現』的題目與概念來出題：先簡述你從圖片看到的題目或知識點，再據此出 5 題同類型類似題（更換數字或條件，但考點必須一致）。絕對不可憑空產生與圖片無關的題目。若同時有文字範例也一併參考。" }
       ];
       currentImages.forEach(u => userContent.push({ type: "image_url", image_url: { url: u } }));
     } else {
@@ -387,6 +387,22 @@ ${content || "（請參考附圖中的題目）"}`;
 function renderQuiz() {
   const box = $("questions");
   box.innerHTML = "";
+  if (currentImages.length) {
+    const prev = document.createElement("div");
+    prev.style.marginBottom = "14px";
+    prev.innerHTML = '<div class="meta">你上傳的參考圖（出題依據）：</div>';
+    currentImages.forEach(u => {
+      const img = document.createElement("img");
+      img.src = u;
+      img.style.maxWidth = "180px";
+      img.style.maxHeight = "180px";
+      img.style.margin = "6px";
+      img.style.border = "1px solid var(--line)";
+      img.style.borderRadius = "8px";
+      prev.appendChild(img);
+    });
+    box.appendChild(prev);
+  }
   currentQuiz.forEach((item, i) => {
     const d = document.createElement("div");
     d.className = "q";
