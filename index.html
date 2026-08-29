@@ -44,18 +44,19 @@
     <div id="settings">
       <div class="row">
         <div>
-          <label>API Key</label>
-          <input id="apiKey" type="password" placeholder="sk-or-v1-...">
+          <label>API Key（本地 Ollama 可留空）</label>
+          <input id="apiKey" type="password" placeholder="（本地 Ollama 可留空）">
         </div>
         <div>
           <label>模型名稱</label>
-          <input id="model" placeholder="gemini-2.0-flash">
+          <input id="model" placeholder="qwen2.5vl:7b">
         </div>
         <div>
           <label>API 網址（OpenAI 相容）</label>
-          <input id="baseUrl" placeholder="https://generativelanguage.googleapis.com/v1beta/openai">
+          <input id="baseUrl" placeholder="http://localhost:11434/v1">
         </div>
       </div>
+      <div id="modeStatus" class="meta" style="margin-top:8px"></div>
     </div>
   </div>
 
@@ -114,12 +115,12 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const LS = { key:"dq_key", model:"dq_model_v2", base:"dq_base_v2", hist:"dq_history" };
+const LS = { key:"dq_key", model:"dq_model_v3", base:"dq_base_v3", hist:"dq_history" };
 
 function loadSettings() {
   $("apiKey").value = localStorage.getItem(LS.key) || "";
-  $("model").value = localStorage.getItem(LS.model) || "gemini-2.0-flash";
-  $("baseUrl").value = localStorage.getItem(LS.base) || "https://generativelanguage.googleapis.com/v1beta/openai";
+  $("model").value = localStorage.getItem(LS.model) || "qwen2.5vl:7b";
+  $("baseUrl").value = localStorage.getItem(LS.base) || "http://localhost:11434/v1";
 }
 function saveSettings() {
   localStorage.setItem(LS.key, $("apiKey").value.trim());
@@ -127,6 +128,21 @@ function saveSettings() {
   localStorage.setItem(LS.base, $("baseUrl").value.trim());
 }
 ["apiKey","model","baseUrl"].forEach(id => $(id).addEventListener("change", saveSettings));
+
+async function autoDetectLocal() {
+  try {
+    const r = await fetch("http://localhost:11434/api/version", { method: "GET" });
+    if (r.ok) {
+      $("baseUrl").value = "http://localhost:11434/v1";
+      $("model").value = "qwen2.5vl:7b";
+      localStorage.setItem(LS.base, "http://localhost:11434/v1");
+      localStorage.setItem(LS.model, "qwen2.5vl:7b");
+      $("modeStatus").textContent = "✅ 已連線本機 Ollama（qwen2.5vl:7b），可直接出題，無須 API Key。";
+      return;
+    }
+  } catch (_) {}
+  $("modeStatus").textContent = "⚠️ 未偵測到本機 Ollama。若要用本機出題，請先執行 start-ollama.bat；或在上方填寫雲端 API Key。";
+}
 
 function clearContent() { $("content").value = ""; $("file").value = ""; $("imgFile").value = ""; currentImages = []; }
 
@@ -206,10 +222,16 @@ async function callAI(messages, temperature = 0.7, modelOverride = null) {
   const key = $("apiKey").value.trim();
   const model = (modelOverride || $("model").value.trim());
   const base = $("baseUrl").value.trim().replace(/\/$/, "");
-  if (!key) throw new Error("請先填寫 API Key");
+  const isLocal = /localhost|127\.0\.0\.1/i.test(base);
+  if (!key && !isLocal) throw new Error("請先填寫 API Key");
+
+  if (isLocal) return await callOllamaNative(base, model, messages, temperature);
+
+  const headers = { "Content-Type": "application/json" };
+  if (key) headers["Authorization"] = "Bearer " + key;
   const res = await fetch(base + "/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+    headers: headers,
     body: JSON.stringify({ model, messages, temperature, max_tokens: 6000 })
   });
   if (!res.ok) {
@@ -218,6 +240,42 @@ async function callAI(messages, temperature = 0.7, modelOverride = null) {
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
+}
+
+async function callOllamaNative(base, model, messages, temperature) {
+  const sys = (messages.find(m => m.role === "system")?.content) || "";
+  const userMsg = messages.find(m => m.role === "user");
+  let text = "";
+  const images = [];
+  if (userMsg) {
+    if (typeof userMsg.content === "string") {
+      text = userMsg.content;
+    } else if (Array.isArray(userMsg.content)) {
+      userMsg.content.forEach(p => {
+        if (p.type === "text") text += p.text;
+        else if (p.type === "image_url") {
+          const u = p.image_url?.url || "";
+          const b64 = u.startsWith("data:") ? u.split(",")[1] : u;
+          if (b64) images.push(b64);
+        }
+      });
+    }
+  }
+  const nativeMsgs = [];
+  if (sys) nativeMsgs.push({ role: "system", content: sys });
+  nativeMsgs.push({ role: "user", content: text, images });
+  const url = base.replace(/\/v1\/?$/i, "") + "/api/chat";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: nativeMsgs, stream: false, options: { temperature, num_predict: 6000, num_ctx: 16384 } })
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error("Ollama 錯誤 " + res.status + "：" + txt.slice(0, 300));
+  }
+  const data = await res.json();
+  return data.message?.content || "";
 }
 
 let currentQuiz = [];
@@ -229,12 +287,15 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function generateWithRetry(msgs) {
   const primary = $("model").value.trim();
   const baseVal = $("baseUrl").value.trim();
+  const isLocal = /localhost|127\.0\.0\.1/i.test(baseVal);
   let effectivePrimary = primary;
   if (currentImages.length > 0 && /googleapis\.com/i.test(baseVal)) {
     effectivePrimary = "gemini-2.0-flash";
   }
   let order;
-  if (currentImages.length > 0) {
+  if (isLocal) {
+    order = [primary];
+  } else if (currentImages.length > 0) {
     order = [effectivePrimary, ...VISION_FREE.filter(m => m !== effectivePrimary)];
   } else {
     order = [primary, ...FREE_MODELS.filter(m => m !== primary)];
@@ -247,6 +308,7 @@ async function generateWithRetry(msgs) {
     } catch (e) {
       lastErr = e;
       const msg = String(e.message);
+      if (isLocal) throw e;
       if (msg.includes("429")) { await sleep(5000 + attempt * 2000); continue; }
       if (msg.includes("402")) { continue; }
       if (/image|vision|does not support/i.test(msg)) { continue; }
@@ -263,13 +325,14 @@ async function generate() {
   const btn = $("genBtn"); btn.disabled = true; btn.textContent = "產生中...";
   try {
     const subject = $("subject").value;
-    const sys = "你是台灣國中教育會考（國中會考）的出題老師，依據學習內容或圖片設計符合會考程度、中高難度的單選選擇題。";
+    const sys = "你是台灣國中教育會考（國中會考）的出題老師，依據學習內容或圖片設計符合會考程度、中高難度的單選選擇題。你必須全程使用繁體中文出題與撰寫解析，絕對不可使用英文（若需保留原文專有名詞，請以括號附註中文，例如「牛頓（Newton）」）。";
     let user = `使用者會提供「範例題目」（可能一道或多道，可能在文字或圖片中）。
 請根據這些範例，產生 5 題「同類型、同難度」的練習題（類似題）：題目形式/考點要與範例一致，但更換數字、條件或內容，不要直接重複範例。
 例如輸入「1+1」，就出「其他數字+其他數字」或「其他數字-其他數字」這類算術題。
 【重要】本卷科目限定為「${subject}」，所有題目都必須是 ${subject} 的範圍，絕對不能出其他科目的題目。
+【語言】題幹、四個選項、解析都必須全程使用繁體中文，不可使用英文（必要的原文專有名詞請括號附註中文）。
 難度需符合台灣國中教育會考程度、中高難度。請出成「單選選擇題」，每題 4 個選項，只有一個正確。
-題型請模仿國中會考風格：單選四選一、題幹可為情境式或素養導向敘述，選項為完整可讀的內容（勿用過短代號），必要時可加入圖表/數據的文字描述。題幹請寫得詳細完整，包含充足的情境背景與條件描述，不要過於簡短（目標 3–6 句情境 + 提問）。
+題型請模仿國中會考風格：單選四選一、題幹可為情境式或素養導向敘述，選項為完整可讀的內容（勿用過短代號），必要時可加入圖表/數據的文字描述。題幹請寫得詳細完整，包含充足的情境背景與條件描述，不要過於簡短（目標 3–6 句情境 + 提問）。若為理科（理化/生物/地球科學），請清楚列出已知條件、所用公式與計算步驟，題目數據要合理且單位正確。
 只回傳 JSON 陣列，格式如下，不要有任何額外文字：
 [{"q":"題幹","options":["選項A","選項B","選項C","選項D"],"answer":0,"explain":"正確答案的簡短解析"}, ...]
 （answer 為正確選項在 options 中的索引，從 0 開始；選項順序要隨機打散，不要把正解都放同一位置）
@@ -498,6 +561,7 @@ function logErr(stage, e) {
 }
 
 loadSettings();
+autoDetectLocal();
 renderHistory();
 </script>
 </body>
